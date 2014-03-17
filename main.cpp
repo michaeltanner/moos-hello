@@ -14,49 +14,21 @@
 
 bool OnConnectConsumer(void *pParam);
 bool OnConnectStats(void *pParam);
-bool OnMail(void *pParam);
+bool OnMail(void *pParam); // only called when subscribed event isn't handled by an Active Queue
+bool onConsumerMail(CMOOSMsg &M, void *param);
+bool onStatsMail(CMOOSMsg &M, void *param);
 
 void receiverThread(std::string clientName, bool (*onConnectCallback)(void*),
                     std::string msgName, bool (*mailCallback)(CMOOSMsg &, void*));
 void producerThread();
 
-bool test(CMOOSMsg &M, void *param)
-{
-    std::stringstream var_name;
-    std::vector<void*> *params = static_cast<std::vector<void*>*>(param);
-    std::string clientName = *static_cast<std::string*>((*params)[0]);
-    CMOOSCommClient *pClient = reinterpret_cast<CMOOSCommClient*>((*params)[1]);
-
-    var_name << "latency_" << clientName;
-
-    double receiveTime = MOOSTime();
-    double sentTime = M.GetTime();
-    double latency = receiveTime - sentTime;
-
-    pClient->Notify(var_name.str(), latency);
-
-    return true;
-}
-
-bool test2(CMOOSMsg &M, void *param)
-{
-    std::stringstream var_name;
-    std::vector<void*> *params = static_cast<std::vector<void*>*>(param);
-    std::string clientName = *static_cast<std::string*>((*params)[0]);
-
-    std::cout << "Latency (" << clientName << "): " << M.GetDouble()*1000 << " us" << std::endl;
-
-
-    return true;
-}
-
 int main(int argc , char * argv [])
 {
     std::thread p (producerThread);
-    std::thread c0 (receiverThread, "CONSUMER_0", OnConnectConsumer, "shared_var", test);
-    std::thread c1 (receiverThread, "CONSUMER_1", OnConnectConsumer, "shared_var", test);
-    std::thread sm0 (receiverThread, "STATS_MONITOR_0", OnConnectStats, "latency_CONSUMER_0", test2);
-    std::thread sm1 (receiverThread, "STATS_MONITOR_1", OnConnectStats, "latency_CONSUMER_1", test2);
+    std::thread c0 (receiverThread, "CONSUMER_0", OnConnectConsumer, "shared_var", onConsumerMail);
+    std::thread c1 (receiverThread, "CONSUMER_1", OnConnectConsumer, "shared_var", onConsumerMail);
+    std::thread sm0 (receiverThread, "STATS_MONITOR_0", OnConnectStats, "latency_CONSUMER_0", onStatsMail);
+    std::thread sm1 (receiverThread, "STATS_MONITOR_1", OnConnectStats, "latency_CONSUMER_1", onStatsMail);
 
     while (true); // Could do [thread].join();, but this is the same effect
 
@@ -132,5 +104,35 @@ bool OnMail(void *pParam)
     {
         std::cout << "Message from: " << q->GetSource() << ", Name: " << q->GetName() << std::endl;
     }
+    return true;
+}
+
+bool onConsumerMail(CMOOSMsg &M, void *param)
+{
+    std::stringstream var_name;
+    std::vector<void*> *params = static_cast<std::vector<void*>*>(param);
+    std::string clientName = *static_cast<std::string*>((*params)[0]);
+    CMOOSCommClient *pClient = reinterpret_cast<CMOOSCommClient*>((*params)[1]);
+
+    var_name << "latency_" << clientName;
+
+    double receiveTime = MOOSTime();
+    double sentTime = M.GetTime();
+    double latency = receiveTime - sentTime;
+
+    pClient->Notify(var_name.str(), latency);
+
+    return true;
+}
+
+bool onStatsMail(CMOOSMsg &M, void *param)
+{
+    std::stringstream var_name;
+    std::vector<void*> *params = static_cast<std::vector<void*>*>(param);
+    std::string clientName = *static_cast<std::string*>((*params)[0]);
+
+    std::cout << "Latency (" << clientName << "): " << M.GetDouble()*1000 << " us" << std::endl;
+
+
     return true;
 }
