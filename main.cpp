@@ -3,6 +3,7 @@
 #include <iostream>
 #include <ctime>
 #include <string>
+#include <vector>
 
 #include "MOOS/libMOOS/Comms/MOOSAsyncCommClient.h"
 #include "MOOS/libMOOS/Utils/MOOSUtilityFunctions.h"
@@ -12,31 +13,72 @@
 
 
 bool OnConnectConsumer(void *pParam);
-bool OnConnectStatsMonitor(void *pParam);
+bool OnConnectStats(void *pParam);
 bool OnMail(void *pParam);
 
-void receiverThread(std::string clientName, bool (*onConnectCallback)(void*));
+void receiverThread(std::string clientName, bool (*onConnectCallback)(void*),
+                    std::string msgName, bool (*mailCallback)(CMOOSMsg &, void*));
 void producerThread();
+
+bool test(CMOOSMsg &M, void *param)
+{
+    std::stringstream var_name;
+    std::vector<void*> *params = static_cast<std::vector<void*>*>(param);
+    std::string clientName = *static_cast<std::string*>((*params)[0]);
+    CMOOSCommClient *pClient = reinterpret_cast<CMOOSCommClient*>((*params)[1]);
+
+    var_name << "latency_" << clientName;
+
+    double receiveTime = MOOSTime();
+    double sentTime = M.GetTime();
+    double latency = receiveTime - sentTime;
+
+    pClient->Notify(var_name.str(), latency);
+
+    return true;
+}
+
+bool test2(CMOOSMsg &M, void *param)
+{
+    std::stringstream var_name;
+    std::vector<void*> *params = static_cast<std::vector<void*>*>(param);
+    std::string clientName = *static_cast<std::string*>((*params)[0]);
+
+    std::cout << "Latency (" << clientName << "): " << M.GetDouble()*1000 << " us" << std::endl;
+
+
+    return true;
+}
 
 int main(int argc , char * argv [])
 {
     std::thread p (producerThread);
-    std::thread c0 (receiverThread, "CONSUMER_0", OnConnectConsumer);
-    std::thread c1 (receiverThread, "CONSUMER_1", OnConnectConsumer);
-    std::thread sm (receiverThread, "STATS_MONITOR", OnConnectStatsMonitor);
+    std::thread c0 (receiverThread, "CONSUMER_0", OnConnectConsumer, "shared_var", test);
+    std::thread c1 (receiverThread, "CONSUMER_1", OnConnectConsumer, "shared_var", test);
+    std::thread sm0 (receiverThread, "STATS_MONITOR_0", OnConnectStats, "latency_CONSUMER_0", test2);
+    std::thread sm1 (receiverThread, "STATS_MONITOR_1", OnConnectStats, "latency_CONSUMER_1", test2);
 
     while (true); // Could do [thread].join();, but this is the same effect
 
     return 0;
 }
 
-void receiverThread(std::string clientName, bool (*onConnectCallback)(void*))
+
+void receiverThread(std::string clientName, bool (*onConnectCallback)(void*),
+                    std::string msgName, bool (*mailCallback)(CMOOSMsg &, void*))
 {
     MOOS::MOOSAsyncCommClient client;
+    std::vector<void*> params;
+    params.push_back(static_cast<void*>(&clientName));
+    params.push_back(static_cast<void*>(&client));
 
     client.SetOnConnectCallBack(onConnectCallback, &client);
     client.SetOnMailCallBack(OnMail, &client);
+    client.AddActiveQueue("testing_callback", mailCallback, static_cast<void*>(&params));
+    client.AddMessageRouteToActiveQueue("testing_callback", msgName);
+
     client.Run("localhost", 9000, clientName);
+
 
     while (true); // Wait forever
 }
@@ -56,24 +98,26 @@ void producerThread()
     }
 }
 
+bool OnConnectStats(void *pParam)
+{
+    CMOOSCommClient* pC = reinterpret_cast<CMOOSCommClient*> (pParam);
+
+    pC->Register("*", "CONSUMER_0", 0.0);//CONSUME_MS);
+    pC->Register("*", "CONSUMER_1", 0.0);//CONSUME_MS);
+
+    return true;
+}
+
 bool OnConnectConsumer(void *pParam)
 {
     CMOOSCommClient* pC = reinterpret_cast<CMOOSCommClient*> (pParam);
 
-    pC->Register("shared_var", "*", CONSUME_MS);
+    pC->Register("*", "PRODUCER", 0.0);//CONSUME_MS);
 
     return true;
 }
 
-bool OnConnectStatsMonitor(void *pParam)
-{
-    CMOOSCommClient* pC = reinterpret_cast<CMOOSCommClient*> (pParam);
-
-    pC->Register("latency_*", "*", CONSUME_MS);
-
-    return true;
-}
-
+// Note: this only appears to be called when the event is not captured in an active queue
 bool OnMail(void *pParam)
 {
     CMOOSCommClient* pC = reinterpret_cast<CMOOSCommClient*> (pParam);
@@ -86,24 +130,7 @@ bool OnMail(void *pParam)
     // Loop through the mail and print out details
     for (q = M.begin () ; q!=M.end () ; q++)
     {
-        // Figure out what type of variable was updated
-        if (q->GetName() == "shared_var")
-        {
-            std::stringstream var_name;
-            var_name << "latency_" << std::this_thread::get_id();
-
-            double receiveTime = MOOSTime();
-            double sentTime = q->GetTime();
-            double latency = receiveTime - sentTime;
-
-            pC->Notify(var_name.str(), latency);
-        }
-        else if (q->GetName().substr(0, 7) == "latency")
-        {
-            // Print out the message latency
-            std::cout << q->GetName() << ": " << q->GetDouble()*1000 << " us" << std::endl;
-        }
+        std::cout << "Message from: " << q->GetSource() << ", Name: " << q->GetName() << std::endl;
     }
-
     return true;
 }
