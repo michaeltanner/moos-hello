@@ -1,0 +1,16 @@
+package moos_hello;
+
+message Point {
+        required int32 x = 1;
+        required int32 y = 2;
+}
+
+message Observation {
+        optional string name = 1;
+        required Point point = 2;
+}
+
+message Observations {
+        repeated Observation observation = 1;
+}
+

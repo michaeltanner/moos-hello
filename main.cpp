@@ -8,6 +8,8 @@
 #include "MOOS/libMOOS/Comms/MOOSAsyncCommClient.h"
 #include "MOOS/libMOOS/Utils/MOOSUtilityFunctions.h"
 
+#include "observation.pb.h"
+
 #define CONSUME_MS double(1.0/100.0)
 #define PRODUCE_MS int( (1.0/1.0)*1000)
 
@@ -24,6 +26,8 @@ void producerThread();
 
 int main(int argc , char * argv [])
 {
+    GOOGLE_PROTOBUF_VERIFY_VERSION; // Verify library matches included headers
+
     std::thread p (producerThread);
     std::thread c0 (receiverThread, "CONSUMER_0", OnConnectConsumer, "shared_var", onConsumerMail);
     std::thread c1 (receiverThread, "CONSUMER_1", OnConnectConsumer, "shared_var", onConsumerMail);
@@ -31,6 +35,9 @@ int main(int argc , char * argv [])
     std::thread sm1 (receiverThread, "STATS_MONITOR_1", OnConnectStats, "latency_CONSUMER_1", onStatsMail);
 
     while (true); // Could do [thread].join();, but this is the same effect
+
+    // We never get here...but shown for completeness
+    google::protobuf::ShutdownProtobufLibrary(); // Delete all global objects allocated by libprotobuf
 
     return 0;
 }
@@ -66,7 +73,20 @@ void producerThread()
     {
         std::this_thread::sleep_for(std::chrono::milliseconds(PRODUCE_MS));
 
-        client.Notify("shared_var", std::to_string(i++));
+        // Create an observation
+        moos_hello::Observation observation;
+        std::string name = "" + std::to_string(MOOSTime(false));
+        observation.set_name(name);
+        moos_hello::Point *point = new moos_hello::Point;
+        point->set_x(123);
+        point->set_y(234);
+        observation.set_allocated_point(point);
+
+        // Print out the observation
+        std::cout << "Observation Sent: " << observation.DebugString() << std::endl;
+
+        // Send the compressed observation
+        client.Notify("shared_var", observation.SerializeAsString());
     }
 }
 
@@ -74,8 +94,8 @@ bool OnConnectStats(void *pParam)
 {
     CMOOSCommClient* pC = reinterpret_cast<CMOOSCommClient*> (pParam);
 
-    pC->Register("*", "CONSUMER_0", 0.0);//CONSUME_MS);
-    pC->Register("*", "CONSUMER_1", 0.0);//CONSUME_MS);
+    pC->Register("*", "CONSUMER_0", CONSUME_MS);
+    pC->Register("*", "CONSUMER_1", CONSUME_MS);
 
     return true;
 }
@@ -84,7 +104,7 @@ bool OnConnectConsumer(void *pParam)
 {
     CMOOSCommClient* pC = reinterpret_cast<CMOOSCommClient*> (pParam);
 
-    pC->Register("*", "PRODUCER", 0.0);//CONSUME_MS);
+    pC->Register("*", "PRODUCER", CONSUME_MS);
 
     return true;
 }
@@ -104,6 +124,7 @@ bool OnMail(void *pParam)
     {
         std::cout << "Message from: " << q->GetSource() << ", Name: " << q->GetName() << std::endl;
     }
+
     return true;
 }
 
@@ -120,7 +141,14 @@ bool onConsumerMail(CMOOSMsg &M, void *param)
     double sentTime = M.GetTime();
     double latency = receiveTime - sentTime;
 
+    // Send the message latency
     pClient->Notify(var_name.str(), latency);
+
+    // Print out the received Observation
+    std::string data = M.GetAsString();
+    moos_hello::Observation observation;
+    if ( observation.ParseFromArray(&data[0], data.size()) )
+        std::cout << "Observation Received: " << observation.DebugString();
 
     return true;
 }
